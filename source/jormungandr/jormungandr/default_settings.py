@@ -9,7 +9,7 @@ from flask_restful.inputs import boolean
 DEFAULT_SQLALCHEMY_ENGINE_OPTIONS = {"connect_args": {"options": "-c statement_timeout=1000"}}  # 1000ms
 
 # path of the configuration file for each instances
-INSTANCES_DIR = os.getenv('JORMUNGANDR_INSTANCES_DIR', '/etc/jormungandr.d')
+INSTANCES_DIR = os.getenv('JORMUNGANDR_INSTANCES_DIR', '/home/jbonte/dev/run/jormun_config')
 
 # Patern that matches Jormungandr configuration files
 #  ex: '*.json' will match all json files within "INSTANCES_DIR" directory

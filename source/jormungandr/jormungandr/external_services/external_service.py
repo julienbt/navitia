@@ -49,12 +49,12 @@ class AbstractExternalService(object):
         Call external_services webservice with URL defined in settings
         :return: data received from the webservice
         """
+        url = "{}?{}".format(self.service_url, urlencode(arguments, doseq=True))
         logging.getLogger(__name__).debug(
-            'forseti external_services service , call url : {}'.format(self.service_url)
+            'forseti external_services service , call url : {}'.format(url)
         )
         result = None
         try:
-            url = "{}?{}".format(self.service_url, urlencode(arguments, doseq=True))
             result = self.breaker.call(requests.get, url=url, timeout=self.timeout)
             self.record_call(url=url, status="OK")
         except pybreaker.CircuitBreakerError as e:
@@ -68,8 +68,9 @@ class AbstractExternalService(object):
             self.record_call(url=url, status='failure', reason=str(e))
         return result
 
-    def get_codes(self, pt_object, codes):
-        return [('{}_code[]'.format(pt_object), code.value) for code in codes if code.type == 'source']
+    def get_codes(self, pt_object, code):
+        # return [('{}_code[]'.format(pt_object), code.value) for code in codes if code.type == 'source']
+        return [('{}_code[]'.format(pt_object), code)]
 
     def record_call(self, url, status, **kwargs):
         """

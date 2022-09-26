@@ -30,12 +30,14 @@
 from __future__ import absolute_import, print_function, unicode_literals, division
 
 import pybreaker
+import string
 import logging
 from jormungandr.external_services.external_service import AbstractExternalService
 from jormungandr import utils
 import gevent
 import gevent.pool
 from jormungandr import cache, app
+from jormungandr.interfaces.v1.serializer.pt import VehicleJourneyPositionsSerializer
 from navitiacommon import type_pb2
 
 
@@ -66,33 +68,23 @@ class VehiclePosition(AbstractExternalService):
             return None
         return resp.get('vehicle_positions', [])
 
-    def _vehicle_journey_position(self, vehicle_journey_position, response_json):
-        if not response_json:
-            logging.getLogger(__name__).debug(
-                "Vehicle position not found for vehicle_journey {}".format(
-                    vehicle_journey_position.vehicle_journey.uri
-                )
-            )
-            return
-        if len(response_json) >= 2:
-            logging.getLogger(__name__).warning(
-                "Multiple vehicles positions for vehicle_journey {}".format(
-                    vehicle_journey_position.vehicle_journey.uri
-                )
-            )
-        if response_json:
-            first_vehicle_position = response_json[0]
-            vehicle_journey_position.coord.lon = first_vehicle_position.get("longitude")
-            vehicle_journey_position.coord.lat = first_vehicle_position.get("latitude")
-            vehicle_journey_position.bearing = first_vehicle_position.get("bearing")
-            vehicle_journey_position.speed = first_vehicle_position.get("speed")
-            vehicle_journey_position.data_freshness = type_pb2.REALTIME
-            occupancy = first_vehicle_position.get("occupancy", None)
-            if occupancy:
-                vehicle_journey_position.occupancy = occupancy
-            feed_created_at = first_vehicle_position.get("feed_created_at", None)
-            if feed_created_at:
-                vehicle_journey_position.feed_created_at = utils.make_timestamp_from_str(feed_created_at)
+    def _line_code_add_vehicle_position(self, vehicle_position, response_json):
+        vehicle_journey_position = type_pb2.VehicleJourneyPosition()
+        vehicle_journey_position.coord.lon = response_json.get("longitude")
+        vehicle_journey_position.coord.lat = response_json.get("latitude")
+        vehicle_journey_position.bearing = response_json.get("bearing")
+        vehicle_journey_position.speed = response_json.get("speed")
+        vehicle_journey_position.data_freshness = type_pb2.REALTIME
+        # the property `occupancy`
+        occupancy = response_json.get("occupancy", None)
+        if occupancy is not None:
+            vehicle_journey_position.occupancy = occupancy
+        # the property `feed_created_at`
+        feed_created_at = response_json.get("feed_created_at", None)
+        if feed_created_at:
+            feed_created_at_timestamp = utils.make_timestamp_from_str(feed_created_at)
+            vehicle_journey_position.feed_created_at = feed_created_at_timestamp
+        vehicle_position.vehicle_journey_positions.append(vehicle_journey_position)
 
     def update_response(self, instance, vehicle_positions, **kwargs):
         futures = []
@@ -102,16 +94,26 @@ class VehiclePosition(AbstractExternalService):
         # Copy the current request context to be used in greenlet
         reqctx = utils.copy_flask_request_context()
 
-        def worker(vehicle_journey_position, args):
+        def line_code_worker(vehicle_position, args):
             # Use the copied request context in greenlet
             with utils.copy_context_in_greenlet_stack(reqctx):
-                return vehicle_journey_position, self.get_response(args)
+                return vehicle_position, self.get_response(args)
 
+        # Remove all items of the list `vehicle_journey_positions`
         for vehicle_position in vehicle_positions:
-            for vehicle_journey_position in vehicle_position.vehicle_journey_positions:
-                args = self.get_codes('vehicle_journey', vehicle_journey_position.vehicle_journey.codes)
-                futures.append(pool.spawn(worker, vehicle_journey_position, args))
+            num_of_vehicle_journey_positions = len(vehicle_position.vehicle_journey_positions)
+            for _ in range(num_of_vehicle_journey_positions):
+                del vehicle_position.vehicle_journey_positions[-1]
+
+        # Keep all line codes
+        for vehicle_position in vehicle_positions:
+            line_uri = vehicle_position.line.uri
+            line_code = string.split(line_uri, ":")[2]
+            args = self.get_codes('line', line_code)
+            futures.append(pool.spawn(line_code_worker, vehicle_position, args))
 
         for future in gevent.iwait(futures):
-            vehicle_journey_position, response = future.get()
-            self._vehicle_journey_position(vehicle_journey_position, response)
+            vehicle_position, response = future.get()
+            if response is not None:
+                for i, res_element in enumerate(response):
+                    self._line_code_add_vehicle_position(vehicle_position, res_element)
